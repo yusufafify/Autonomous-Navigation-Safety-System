@@ -137,8 +137,8 @@ overlaid on detected objects. Press **`q`** to quit.
 | Phase | Milestone                             | Status         |
 | ----- | ------------------------------------- | -------------- |
 | 1     | Environment setup & project scaffold  | ✅ Complete    |
-| 2     | Camera interface + YOLO integration   | 🔄 In Progress |
-| 3     | Monocular depth estimation            | ⬜ Planned     |
+| 2     | Distance estimation + decision logic  | ✅ Complete    |
+| 3     | Monocular depth estimation            | 🔄 In Progress |
 | 4     | Decision engine (STOP / LEFT / RIGHT) | ⬜ Planned     |
 | 5     | End-to-end integration & testing      | ⬜ Planned     |
 
