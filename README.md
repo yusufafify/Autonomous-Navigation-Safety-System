@@ -173,8 +173,3 @@ overlaid on detected objects. Press **`q`** to quit.
 | **Lighting conditions**         | Both YOLO and MiDaS performance degrade in low light, glare, or highly reflective environments.                                                         |
 
 ---
-
-## License
-
-This project is developed as a private freelance engagement. All rights are
-reserved by the client unless otherwise agreed upon.
