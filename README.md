@@ -120,27 +120,57 @@ overlaid on detected objects. Press **`q`** to quit.
 
 ## File Manifest
 
-| File                   | Purpose                                                                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `src/utils/camera.py`  | Threaded camera capture class — reads frames in a background thread to minimize latency.                                           |
-| `src/core/detector.py` | YOLOv8 wrapper — loads a pretrained model and returns structured detection results (bounding boxes, class IDs, confidence scores). |
-| `src/core/depth.py`    | _(Planned)_ Monocular depth estimation using MiDaS or Depth Anything.                                                              |
-| `src/core/decision.py` | _(Planned)_ Decision engine that maps detections + depth to control flags.                                                         |
-| `src/utils/viz.py`     | _(Planned)_ Visualization utilities for drawing overlays on frames.                                                                |
-| `src/utils/config.py`  | _(Planned)_ Configuration loader for YAML/JSON parameter files.                                                                    |
-| `main.py`              | Application entry point — ties camera, detector, and display together.                                                             |
+| File                      | Purpose                                                                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `src/utils/camera.py`     | Threaded camera capture class — reads frames in a background thread to minimize latency.                                           |
+| `src/utils/visualizer.py` | Safe corridor trapezoid and proximity heat bars.                                                                                   |
+| `src/core/detector.py`    | YOLOv8 wrapper — loads a pretrained model and returns structured detection results (bounding boxes, class IDs, confidence scores). |
+| `src/core/distance.py`    | Hybrid distance estimation — geometry (pinhole model) for known classes, MiDaS depth fallback for others.                          |
+| `src/core/depth.py`       | MiDaS v2.1 Small wrapper with frame-skip cooldown for monocular depth estimation.                                                  |
+| `src/core/decision.py`    | Safety intervention engine — STOP / AVOID / GO flags with temporal smoothing, weighted direction, and obstruction detection.       |
+| `main.py`                 | Application entry point — full pipeline with `--save` recording option.                                                            |
+
+---
+
+## Final Features
+
+| Feature                   | Description                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------ |
+| **YOLOv8 Detection**      | Real-time object detection with bounding boxes and confidence scores.          |
+| **Hybrid Distance**       | Geometry-based for known classes, MiDaS depth-map fallback for unknowns.       |
+| **Safety Intervention**   | `STOP` / `AVOID LEFT` / `AVOID RIGHT` / `GO` flags with temporal smoothing.    |
+| **Obstruction Detection** | Depth-map analysis triggers `STOP: OBSTRUCTION` even without YOLO detections.  |
+| **Safe Corridor**         | Semi-transparent trapezoid showing navigable path (green = clear, red = stop). |
+| **Proximity Heat Bars**   | Colour-coded bars next to each object (green / yellow / flashing red).         |
+| **AI Depth Preview**      | Colourised MiDaS depth map inset (`AI DEPTH VIEW`) in the bottom-right.        |
+| **Video Recording**       | `--save` flag records the full annotated feed to `/data` as AVI.               |
 
 ---
 
 ## Roadmap
 
-| Phase | Milestone                            | Status         |
-| ----- | ------------------------------------ | -------------- |
-| 1     | Environment setup & project scaffold | ✅ Complete    |
-| 2     | Distance estimation + decision logic | ✅ Complete    |
-| 3     | MiDaS depth integration              | ✅ Complete    |
-| 4     | End-to-end integration & testing     | 🔄 In Progress |
-| 5     | Performance profiling & calibration  | ⬜ Planned     |
+| Phase | Milestone                            | Status      |
+| ----- | ------------------------------------ | ----------- |
+| 1     | Environment setup & project scaffold | ✅ Complete |
+| 2     | Distance estimation + decision logic | ✅ Complete |
+| 3     | MiDaS depth integration              | ✅ Complete |
+| 4     | UI/UX polish & path planning         | ✅ Complete |
+
+---
+
+## Technical Limitations
+
+> **Important:** This is a prototype system. The following limitations should
+> be considered before deploying in any safety-critical context.
+
+| Limitation                      | Details                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Monocular depth accuracy**    | MiDaS produces _relative_ depth, not metric. The linear scaling factor (`depth_scale`) is approximate and should be calibrated per environment.         |
+| **Focal length assumption**     | Geometry-based distance assumes a fixed focal length (default 500 px). Accuracy improves significantly with proper camera calibration.                  |
+| **CPU vs GPU latency**          | On CPU-only systems, MiDaS inference can drop FPS to 5–10. Frame-skip cooldown mitigates this but introduces depth-map staleness.                       |
+| **YOLO class coverage**         | YOLOv8n is trained on COCO (80 classes). Unusual obstacles (e.g., construction barriers, debris) may not be detected; depth-map obstruction helps here. |
+| **Single-camera field of view** | A single front-facing camera provides no rear or peripheral coverage. Multi-camera setups would be needed for full situational awareness.               |
+| **Lighting conditions**         | Both YOLO and MiDaS performance degrade in low light, glare, or highly reflective environments.                                                         |
 
 ---
 

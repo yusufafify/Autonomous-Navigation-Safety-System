@@ -9,19 +9,24 @@ Pipeline (per frame):
   3. Run MiDaS depth estimation (with frame-skip cooldown).
   4. Estimate distance (geometry for known classes, depth fallback).
   5. Run safety-intervention decision engine → STOP / AVOID / GO.
-  6. Render overlays: bounding boxes, distance labels, critical-zone
-     markers, control flag banner, and depth preview inset.
+  6. Render overlays: safe corridor, bounding boxes, proximity bars,
+     distance labels, critical-zone markers, control flag banner,
+     and depth preview inset.
 
 Press **q** to quit.
 
 Usage
 -----
-    python main.py
+    python main.py              # Live feed only
+    python main.py --save       # Live feed + save recording to /data
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 import time
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -31,6 +36,7 @@ from src.core.depth import DepthEstimator
 from src.core.detector import ObjectDetector
 from src.core.distance import DistanceEstimator
 from src.utils.camera import CameraStream
+from src.utils.visualizer import draw_proximity_bars, draw_safe_corridor
 
 
 # ── Configuration ────────────────────────────────────────────────────
@@ -46,6 +52,7 @@ SMOOTHING_WINDOW: int = 5               # frames for temporal smoothing
 DEPTH_SKIP_FRAMES: int = 3              # run MiDaS every N-th frame
 DEPTH_PREVIEW_SIZE: tuple = (200, 150)  # (width, height) of inset
 WINDOW_NAME: str = "Collision Avoidance — Live Feed"
+SAVE_DIR: str = "data"                  # output directory for recordings
 
 
 # ── Drawing Helpers ──────────────────────────────────────────────────
@@ -165,16 +172,33 @@ def draw_depth_preview(
     frame[y_start:y_start + ph, x_start:x_start + pw] = inset
 
 
+# ── Argument Parser ──────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Autonomous Navigation Safety System — Real-Time Demo",
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Record the output feed (with all overlays) to the /data folder.",
+    )
+    return parser.parse_args()
+
+
 # ── Main Loop ────────────────────────────────────────────────────────
 
 def main() -> None:
     """Run the real-time collision-avoidance loop."""
 
+    args = parse_args()
+
     # ── Initialise components ────────────────────────────────────────
     print("[INFO] Starting camera stream …")
     camera = CameraStream(src=CAMERA_SOURCE)
     camera.start()
-    actual_width = camera.frame_size[0]
+    actual_width, actual_height = camera.frame_size
     print(f"[INFO] Camera resolution: {camera.frame_size}  |  FPS: {camera.fps}")
 
     print(f"[INFO] Loading YOLO model: {YOLO_MODEL}")
@@ -195,6 +219,20 @@ def main() -> None:
         avoid_distance=AVOID_DISTANCE,
         smoothing_window=SMOOTHING_WINDOW,
     )
+
+    # ── Video recorder (optional) ────────────────────────────────────
+    writer = None
+    if args.save:
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(SAVE_DIR, f"recording_{timestamp}.avi")
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        writer_fps = camera.fps if camera.fps > 0 else 20.0
+        writer = cv2.VideoWriter(
+            out_path, fourcc, writer_fps, (actual_width, actual_height)
+        )
+        print(f"[INFO] Recording to: {out_path}")
+
     print("[INFO] All modules loaded. Press 'q' to quit.\n")
 
     # ── Main loop ────────────────────────────────────────────────────
@@ -219,10 +257,25 @@ def main() -> None:
 
             # 4. Decision engine (with obstruction check).
             result = intervention.process(detections, depth_map=depth_map)
+            is_stopped = "STOP" in result["flag"]
 
-            # 5. Draw overlays.
+            # 5. Draw overlays (order matters for layering).
+            # — Safe corridor (drawn first, behind everything).
+            draw_safe_corridor(
+                frame,
+                intervention.zone_left,
+                intervention.zone_right,
+                is_stopped=is_stopped,
+            )
+
             # — Bounding boxes.
             detector.draw(frame, detections)
+
+            # — Proximity heat bars.
+            draw_proximity_bars(
+                frame, detections, frame_count=frame_count,
+                stop_dist=STOP_DISTANCE, avoid_dist=AVOID_DISTANCE,
+            )
 
             # — Critical zone lines.
             draw_critical_zone(
@@ -253,7 +306,11 @@ def main() -> None:
                 cv2.LINE_AA,
             )
 
-            # 6. Display.
+            # 6. Write frame if recording.
+            if writer is not None:
+                writer.write(frame)
+
+            # 7. Display.
             cv2.imshow(WINDOW_NAME, frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -265,6 +322,9 @@ def main() -> None:
     finally:
         print("[INFO] Releasing resources …")
         camera.release()
+        if writer is not None:
+            writer.release()
+            print(f"[INFO] Recording saved.")
         cv2.destroyAllWindows()
         print("[INFO] Done.")
 
