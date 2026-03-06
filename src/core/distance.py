@@ -1,36 +1,32 @@
 """
-distance.py — Geometry-Based Distance Estimation
-==================================================
+distance.py — Hybrid Distance Estimation
+==========================================
 Estimates the metric distance (in metres) from the camera to a detected object
-using the **pinhole camera model**.
+using one of two strategies:
 
-The core formula is::
-
-    D = (H_real × f) / h_pixels
-
-where:
-
-- ``D``         — estimated distance to the object (metres).
-- ``H_real``    — known real-world height of the object class (metres).
-- ``f``         — effective focal length of the camera (pixels).
-- ``h_pixels``  — height of the bounding box in the image (pixels).
-
-This is a fast, zero-overhead approach that works well when the camera's
-focal length is roughly calibrated and the detected objects have predictable
-real-world sizes.
+1. **Geometry (primary)** — pinhole camera model ``D = (H_real × f) / h_pixels``
+   for classes with a known real-world height.
+2. **MiDaS depth-map fallback** — for unknown classes, samples the normalised
+   depth map and converts to metres via a linear scale factor.
 
 Usage
 -----
     from src.core.distance import DistanceEstimator
 
     estimator = DistanceEstimator(focal_length=500)
+    # Geometry only:
     distance = estimator.estimate(bbox=[100, 50, 300, 400], class_name="person")
-    # distance ≈ 2.43 m
+    # Hybrid (with depth map):
+    estimator.enrich_detections(detections, depth_map=depth_map)
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+from src.core.depth import DepthEstimator
 
 
 # ── Default Reference Heights (metres) ───────────────────────────────
@@ -79,9 +75,11 @@ class DistanceEstimator:
         self,
         focal_length: float = 500.0,
         reference_heights: Optional[Dict[str, float]] = None,
+        depth_scale: float = 5.0,
     ) -> None:
         self._focal_length = focal_length
         self._ref_heights = reference_heights or dict(DEFAULT_REFERENCE_HEIGHTS)
+        self._depth_scale = depth_scale
 
     # ------------------------------------------------------------------
     # Public API
@@ -119,44 +117,75 @@ class DistanceEstimator:
         return round(distance, 2)
 
     def enrich_detections(
-        self, detections: List[Dict[str, Any]]
+        self,
+        detections: List[Dict[str, Any]],
+        depth_map: Optional[np.ndarray] = None,
     ) -> List[Dict[str, Any]]:
-        """Add a ``"distance"`` key to each detection dict.
+        """Add ``"distance"`` and ``"dist_source"`` keys to each detection.
+
+        Strategy:
+        - If the class is in the height dictionary → **geometry**.
+        - Else if a ``depth_map`` is provided → **MiDaS depth fallback**.
+        - Otherwise → ``None``.
 
         Parameters
         ----------
         detections : list[dict]
             Output of :class:`ObjectDetector.detect`.
+        depth_map : np.ndarray | None
+            Normalised depth map (H × W, uint8, higher = closer) from
+            :class:`DepthEstimator`.  Pass ``None`` to use geometry only.
 
         Returns
         -------
         list[dict]
-            The same list, with each dict now containing a ``"distance"``
-            key (``float | None``).
+            Each dict gains ``"distance"`` (float | None) and
+            ``"dist_source"`` (``"geometry"`` | ``"depth"`` | None).
         """
         for det in detections:
-            det["distance"] = self.estimate(det["bbox"], det["class_name"])
+            geo_dist = self.estimate(det["bbox"], det["class_name"])
+
+            if geo_dist is not None:
+                det["distance"] = geo_dist
+                det["dist_source"] = "geometry"
+            elif depth_map is not None:
+                det["distance"] = self._depth_to_metres(
+                    depth_map, det["bbox"]
+                )
+                det["dist_source"] = "depth"
+            else:
+                det["distance"] = None
+                det["dist_source"] = None
+
         return detections
 
     # ------------------------------------------------------------------
-    # Placeholder — MiDaS / Depth Anything
+    # MiDaS depth → metric conversion
     # ------------------------------------------------------------------
 
-    def estimate_depth_model(self, frame, bbox: List[int]) -> Optional[float]:
-        """Placeholder for neural-network-based depth estimation.
+    def _depth_to_metres(
+        self,
+        depth_map: np.ndarray,
+        bbox: List[int],
+    ) -> Optional[float]:
+        """Convert a MiDaS depth sample to a rough metric distance.
 
-        A future implementation would:
-        1. Run MiDaS or Depth Anything on the full frame to get a depth map.
-        2. Crop the depth map to the bounding-box region.
-        3. Return the median depth value as the object's distance.
+        Uses a simple linear mapping::
+
+            D ≈ depth_scale × (1 − median_value / 255)
+
+        Where ``median_value`` is sampled from the centre of the bbox.
 
         Returns
         -------
-        None
-            Always ``None`` in the current prototype.
+        float | None
+            Distance in metres, or ``None`` if sampling fails.
         """
-        # TODO: Integrate MiDaS / Depth Anything when GPU headroom allows.
-        return None
+        value = DepthEstimator.sample_depth(depth_map, bbox)
+        if value <= 0:
+            return None
+        distance = self._depth_scale * (1.0 - value / 255.0)
+        return round(max(distance, 0.1), 2)
 
     # ------------------------------------------------------------------
     # Properties

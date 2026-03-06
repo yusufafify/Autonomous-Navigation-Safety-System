@@ -10,3 +10,6 @@ ultralytics>=8.3.0
 
 # NOTE: torch & torchvision are installed separately with CUDA support.
 # See README.md → Quick Start for the exact pip command.
+
+# MiDaS depth estimation (required by torch.hub MiDaS model)
+timm>=1.0.0

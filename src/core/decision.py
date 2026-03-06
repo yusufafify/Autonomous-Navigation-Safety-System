@@ -32,9 +32,12 @@ from __future__ import annotations
 from collections import Counter, deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+import numpy as np
+
 
 # ── Flag constants ───────────────────────────────────────────────────
 FLAG_STOP = "STOP"
+FLAG_OBSTRUCTION = "STOP: OBSTRUCTION"
 FLAG_AVOID_LEFT = "AVOID LEFT"
 FLAG_AVOID_RIGHT = "AVOID RIGHT"
 FLAG_GO = "GO"
@@ -73,11 +76,15 @@ class SafetyIntervention:
         stop_distance: float = 1.5,
         avoid_distance: float = 3.0,
         smoothing_window: int = 5,
+        obstruction_threshold: int = 220,
+        obstruction_ratio: float = 0.30,
     ) -> None:
         self._frame_width = frame_width
         self._stop_dist = stop_distance
         self._avoid_dist = avoid_distance
         self._smoothing_window = smoothing_window
+        self._obstruction_thresh = obstruction_threshold
+        self._obstruction_ratio = obstruction_ratio
 
         # Critical zone boundaries (pixel x-coordinates).
         margin = (1.0 - critical_zone_pct) / 2.0
@@ -92,7 +99,9 @@ class SafetyIntervention:
     # ------------------------------------------------------------------
 
     def process(
-        self, detections: List[Dict[str, Any]]
+        self,
+        detections: List[Dict[str, Any]],
+        depth_map: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """Evaluate all detections and return a smoothed control flag.
 
@@ -105,17 +114,26 @@ class SafetyIntervention:
         detections : list[dict]
             Enriched detections (output of
             :meth:`DistanceEstimator.enrich_detections`).
+        depth_map : np.ndarray | None
+            Normalised depth map (H × W, uint8).  If provided, the engine
+            checks for obstructions in the critical zone even when YOLO
+            sees nothing.
 
         Returns
         -------
         dict
-            - ``flag``    : ``str``  — ``"STOP"`` / ``"AVOID LEFT"`` /
-                            ``"AVOID RIGHT"`` / ``"GO"``.
+            - ``flag``    : ``str``  — ``"STOP"`` / ``"STOP: OBSTRUCTION"`` /
+                            ``"AVOID LEFT"`` / ``"AVOID RIGHT"`` / ``"GO"``.
             - ``color``   : ``tuple[int,int,int]`` — BGR colour for display.
             - ``closest`` : ``dict | None`` — the detection that triggered
                             the flag (closest in-zone threat), or ``None``.
         """
-        raw_flag, closest = self._evaluate_raw(detections)
+        # ── Check for depth-map obstruction first ─────────────────────
+        if depth_map is not None and self._check_obstruction(depth_map):
+            raw_flag = FLAG_OBSTRUCTION
+            closest = None
+        else:
+            raw_flag, closest = self._evaluate_raw(detections)
 
         # Push the raw flag into the smoothing window.
         self._history.append(raw_flag)
@@ -232,8 +250,22 @@ class SafetyIntervention:
     @staticmethod
     def _flag_color(flag: str) -> Tuple[int, int, int]:
         """Map a flag string to a BGR colour."""
-        if flag == FLAG_STOP:
+        if flag in (FLAG_STOP, FLAG_OBSTRUCTION):
             return COLOR_STOP
         if flag in (FLAG_AVOID_LEFT, FLAG_AVOID_RIGHT):
             return COLOR_AVOID
         return COLOR_GO
+
+    def _check_obstruction(self, depth_map: np.ndarray) -> bool:
+        """Check for a close obstruction in the critical zone via depth map.
+
+        If more than ``obstruction_ratio`` of pixels in the critical zone
+        strip exceed ``obstruction_threshold`` (meaning they are very
+        close), return ``True``.
+        """
+        zone_strip = depth_map[:, self._zone_left:self._zone_right]
+        if zone_strip.size == 0:
+            return False
+        bright_count = np.count_nonzero(zone_strip >= self._obstruction_thresh)
+        ratio = bright_count / zone_strip.size
+        return ratio >= self._obstruction_ratio

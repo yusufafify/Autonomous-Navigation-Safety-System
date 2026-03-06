@@ -134,13 +134,13 @@ overlaid on detected objects. Press **`q`** to quit.
 
 ## Roadmap
 
-| Phase | Milestone                             | Status         |
-| ----- | ------------------------------------- | -------------- |
-| 1     | Environment setup & project scaffold  | ✅ Complete    |
-| 2     | Distance estimation + decision logic  | ✅ Complete    |
-| 3     | Monocular depth estimation            | 🔄 In Progress |
-| 4     | Decision engine (STOP / LEFT / RIGHT) | ⬜ Planned     |
-| 5     | End-to-end integration & testing      | ⬜ Planned     |
+| Phase | Milestone                            | Status         |
+| ----- | ------------------------------------ | -------------- |
+| 1     | Environment setup & project scaffold | ✅ Complete    |
+| 2     | Distance estimation + decision logic | ✅ Complete    |
+| 3     | MiDaS depth integration              | ✅ Complete    |
+| 4     | End-to-end integration & testing     | 🔄 In Progress |
+| 5     | Performance profiling & calibration  | ⬜ Planned     |
 
 ---
 

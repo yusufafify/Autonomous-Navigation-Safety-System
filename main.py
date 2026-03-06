@@ -6,10 +6,11 @@ Entry point for the Autonomous Navigation Safety System prototype.
 Pipeline (per frame):
   1. Capture a frame from the threaded camera stream.
   2. Run YOLOv8 object detection.
-  3. Estimate the distance to each detected object (pinhole geometry).
-  4. Run the safety-intervention decision engine → STOP / AVOID / GO.
-  5. Render overlays: bounding boxes, distance labels, critical-zone
-     markers, and the control flag banner.
+  3. Run MiDaS depth estimation (with frame-skip cooldown).
+  4. Estimate distance (geometry for known classes, depth fallback).
+  5. Run safety-intervention decision engine → STOP / AVOID / GO.
+  6. Render overlays: bounding boxes, distance labels, critical-zone
+     markers, control flag banner, and depth preview inset.
 
 Press **q** to quit.
 
@@ -26,6 +27,7 @@ import cv2
 import numpy as np
 
 from src.core.decision import SafetyIntervention
+from src.core.depth import DepthEstimator
 from src.core.detector import ObjectDetector
 from src.core.distance import DistanceEstimator
 from src.utils.camera import CameraStream
@@ -41,6 +43,8 @@ CRITICAL_ZONE_PCT: float = 0.40         # Middle 40 % of the frame
 STOP_DISTANCE: float = 1.5              # metres
 AVOID_DISTANCE: float = 3.0             # metres
 SMOOTHING_WINDOW: int = 5               # frames for temporal smoothing
+DEPTH_SKIP_FRAMES: int = 3              # run MiDaS every N-th frame
+DEPTH_PREVIEW_SIZE: tuple = (200, 150)  # (width, height) of inset
 WINDOW_NAME: str = "Collision Avoidance — Live Feed"
 
 
@@ -74,7 +78,11 @@ def draw_distance_labels(
         if dist is None:
             continue
         x1, y1 = det["bbox"][0], det["bbox"][1]
-        label = f"{dist:.1f}m"
+
+        # Show source indicator for depth-estimated distances.
+        source = det.get("dist_source", "")
+        suffix = " [D]" if source == "depth" else ""
+        label = f"{dist:.1f}m{suffix}"
 
         # Background rectangle for readability.
         (tw, th), _ = cv2.getTextSize(
@@ -128,6 +136,35 @@ def draw_control_banner(
     )
 
 
+def draw_depth_preview(
+    frame: np.ndarray,
+    depth_map: np.ndarray,
+    preview_size: tuple[int, int] = (200, 150),
+) -> None:
+    """Overlay a colourised depth preview inset in the bottom-right corner."""
+    pw, ph = preview_size
+    fh, fw = frame.shape[:2]
+
+    # Colourise and resize the depth map.
+    colour_depth = DepthEstimator.colorise(depth_map)
+    inset = cv2.resize(colour_depth, (pw, ph), interpolation=cv2.INTER_AREA)
+
+    # Add "AI DEPTH VIEW" label.
+    cv2.putText(
+        inset, "AI DEPTH VIEW", (6, 18),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+    )
+
+    # Draw a border around the inset.
+    cv2.rectangle(inset, (0, 0), (pw - 1, ph - 1), (200, 200, 200), 2)
+
+    # Place in the bottom-right corner with a small margin.
+    margin = 10
+    y_start = fh - ph - margin
+    x_start = fw - pw - margin
+    frame[y_start:y_start + ph, x_start:x_start + pw] = inset
+
+
 # ── Main Loop ────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -145,6 +182,9 @@ def main() -> None:
         model_path=YOLO_MODEL,
         confidence=CONFIDENCE_THRESHOLD,
     )
+
+    print("[INFO] Loading MiDaS depth model …")
+    depth_model = DepthEstimator(skip_frames=DEPTH_SKIP_FRAMES)
 
     estimator = DistanceEstimator(focal_length=FOCAL_LENGTH)
 
@@ -171,13 +211,16 @@ def main() -> None:
             # 1. Detect objects.
             detections = detector.detect(frame)
 
-            # 2. Estimate distances.
-            estimator.enrich_detections(detections)
+            # 2. Run depth estimation (internally frame-skipped).
+            depth_map = depth_model.infer(frame)
 
-            # 3. Decision engine.
-            result = intervention.process(detections)
+            # 3. Estimate distances (hybrid: geometry + depth fallback).
+            estimator.enrich_detections(detections, depth_map=depth_map)
 
-            # 4. Draw overlays.
+            # 4. Decision engine (with obstruction check).
+            result = intervention.process(detections, depth_map=depth_map)
+
+            # 5. Draw overlays.
             # — Bounding boxes.
             detector.draw(frame, detections)
 
@@ -191,6 +234,9 @@ def main() -> None:
 
             # — Control flag banner.
             draw_control_banner(frame, result["flag"], result["color"])
+
+            # — Depth preview inset (bottom-right).
+            draw_depth_preview(frame, depth_map, DEPTH_PREVIEW_SIZE)
 
             # — FPS & object count.
             frame_count += 1
@@ -207,7 +253,7 @@ def main() -> None:
                 cv2.LINE_AA,
             )
 
-            # 5. Display.
+            # 6. Display.
             cv2.imshow(WINDOW_NAME, frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
