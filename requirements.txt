@@ -1,0 +1,12 @@
+# ============================================================
+# Autonomous Navigation Safety System — Dependencies
+# ============================================================
+# Core vision & deep-learning stack
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Object detection (YOLOv8)
+ultralytics>=8.3.0
+
+# NOTE: torch & torchvision are installed separately with CUDA support.
+# See README.md → Quick Start for the exact pip command.
