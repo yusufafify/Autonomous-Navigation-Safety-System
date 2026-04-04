@@ -72,7 +72,7 @@ A rolling window of the last 5 raw flags is maintained. The output flag
 is the **mode** (most frequent value) of the window, eliminating
 single-frame flicker.
 
----
+## Reference `src/core/decision.py`.
 
 ## Next Steps (Phase 3)
 
